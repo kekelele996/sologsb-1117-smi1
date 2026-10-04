@@ -1,18 +1,20 @@
 import { useMemo, useState } from 'react'
 import { Button, Card, Col, DatePicker, Form, Input, InputNumber, Modal, Row, Select, Slider, Space, Table, Tag, Typography, message } from 'antd'
 import dayjs from 'dayjs'
-import type { BeeColony, ColonyStatus } from '@/types'
-import { BEE_SPECIES, BOX_TYPES, COLONY_STATUSES } from '@/types'
+import type { BeeColony, ColonySource, ColonyStatus } from '@/types'
+import { BEE_SPECIES, BOX_TYPES, COLONY_SOURCES, COLONY_STATUSES } from '@/types'
 import StatusTag from '@/components/common/StatusTag'
 import { usePersistentStore } from '@/hooks/usePersistentStore'
 import { colonyStore } from '@/stores/colonyStore'
 import { orchardStore } from '@/stores/orchardStore'
+import { contractStore } from '@/stores/contractStore'
 import { uid } from '@/utils/id'
 
 /** 蜂群台账：按群势与状态筛选，支持批量改状态与记录检查备注 */
 export default function ColoniesPage(): JSX.Element {
   const colonies = usePersistentStore(colonyStore, (state) => state.rows)
   const orchards = usePersistentStore(orchardStore, (state) => state.rows)
+  const contracts = usePersistentStore(contractStore, (state) => state.rows)
 
   const [statusFilter, setStatusFilter] = useState<ColonyStatus | ''>('')
   const [minFrames, setMinFrames] = useState(0)
@@ -29,9 +31,12 @@ export default function ColoniesPage(): JSX.Element {
     boxType: BeeColony['boxType']
     currentOrchardId: string
     status: ColonyStatus
+    source: ColonySource
+    rentalContractId?: string
     lastCheckDate: dayjs.Dayjs
     healthNote: string
   }>()
+  const watchedSource = Form.useWatch('source', form)
 
   const filtered = useMemo(
     () =>
@@ -47,6 +52,11 @@ export default function ColoniesPage(): JSX.Element {
     return orchards.find((item) => item.id === id)?.name ?? '未分配地块'
   }
 
+  function contractCode(id?: string): string {
+    if (!id) return ''
+    return contracts.find((item) => item.id === id)?.code ?? ''
+  }
+
   function openCreate(): void {
     setEditing(null)
     form.setFieldsValue({
@@ -56,6 +66,8 @@ export default function ColoniesPage(): JSX.Element {
       boxType: '标准继箱',
       currentOrchardId: orchards[0]?.id ?? '',
       status: '待投放',
+      source: '自有',
+      rentalContractId: undefined,
       lastCheckDate: dayjs(),
       healthNote: ''
     })
@@ -71,6 +83,8 @@ export default function ColoniesPage(): JSX.Element {
       boxType: colony.boxType,
       currentOrchardId: colony.currentOrchardId,
       status: colony.status,
+      source: colony.source,
+      rentalContractId: colony.rentalContractId,
       lastCheckDate: dayjs(colony.lastCheckDate),
       healthNote: colony.healthNote
     })
@@ -92,7 +106,9 @@ export default function ColoniesPage(): JSX.Element {
       currentOrchardId: values.currentOrchardId ?? '',
       status: values.status,
       lastCheckDate: values.lastCheckDate.format('YYYY-MM-DD'),
-      healthNote: values.healthNote?.trim() ?? ''
+      healthNote: values.healthNote?.trim() ?? '',
+      source: values.source,
+      rentalContractId: values.source === '租借' ? values.rentalContractId : undefined
     }
     await colonyStore.getState().save(row)
     message.success(`蜂群 ${row.code} 已保存`)
@@ -197,6 +213,17 @@ export default function ColoniesPage(): JSX.Element {
             },
             { title: '箱型', dataIndex: 'boxType', key: 'box', width: 110 },
             {
+              title: '来源',
+              key: 'source',
+              width: 150,
+              render: (_, record: BeeColony) =>
+                record.source === '租借' ? (
+                  <Tag color="orange">租借{record.rentalContractId ? ` · ${contractCode(record.rentalContractId)}` : ''}</Tag>
+                ) : (
+                  <Tag color="green">自有</Tag>
+                )
+            },
+            {
               title: '当前所在地块',
               key: 'orchard',
               render: (_, record: BeeColony) => (record.currentOrchardId ? orchardName(record.currentOrchardId) : '—')
@@ -262,6 +289,21 @@ export default function ColoniesPage(): JSX.Element {
                 <Select options={BOX_TYPES.map((item) => ({ value: item, label: item }))} />
               </Form.Item>
             </Col>
+            <Col span={8}>
+              <Form.Item name="source" label="蜂群来源" rules={[{ required: true }]}>
+                <Select options={COLONY_SOURCES.map((item) => ({ value: item, label: item }))} />
+              </Form.Item>
+            </Col>
+            {watchedSource === '租借' ? (
+              <Col span={8}>
+                <Form.Item name="rentalContractId" label="关联租蜂合同" rules={[{ required: true, message: '租借群需关联合同' }]}>
+                  <Select
+                    options={contracts.map((item) => ({ value: item.id, label: `${item.code}（${item.supplier}）` }))}
+                    placeholder="选择租蜂合同"
+                  />
+                </Form.Item>
+              </Col>
+            ) : null}
             <Col span={8}>
               <Form.Item name="status" label="状态" rules={[{ required: true }]}>
                 <Select options={COLONY_STATUSES.map((item) => ({ value: item, label: item }))} />

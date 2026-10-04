@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
-import { Alert, Card, Col, Row, Segmented, Space, Table, Tag, Typography } from 'antd'
+import { Alert, Card, Col, Row, Segmented, Space, Statistic, Table, Tag, Tooltip, Typography } from 'antd'
+import { InfoCircleOutlined } from '@ant-design/icons'
 import type { BeeColony, DropPoint, Orchard } from '@/types'
 import FlowerWindowBar from '@/components/common/FlowerWindowBar'
 import RouteMap from '@/components/common/RouteMap'
@@ -9,7 +10,10 @@ import { orchardStore } from '@/stores/orchardStore'
 import { colonyStore } from '@/stores/colonyStore'
 import { droppointStore } from '@/stores/droppointStore'
 import { routeStore } from '@/stores/routeStore'
+import { contractStore } from '@/stores/contractStore'
+import { assignmentStore } from '@/stores/assignmentStore'
 import { bloomDays, flowerWindowOverlap } from '@/utils/geo'
+import { computeGapPlan, estimateFee } from '@/utils/gap'
 import { suggestColonyBoxes } from '@/types'
 
 interface Placement {
@@ -36,6 +40,11 @@ interface ScheduleRow {
   placedCodes: string[]
   dropCodes: string[]
   conflicted: boolean
+  capacity: number
+  rented: number
+  gap: number
+  peakDate: string
+  capacityLimited: boolean
 }
 
 /** 季内授粉安排总表：日期条带展示花期与已投放群体，冲突处标红 */
@@ -44,7 +53,19 @@ export default function SchedulePage(): JSX.Element {
   const colonies = usePersistentStore(colonyStore, (state) => state.rows)
   const dropPoints = usePersistentStore(droppointStore, (state) => state.rows)
   const routes = usePersistentStore(routeStore, (state) => state.rows)
+  const contracts = usePersistentStore(contractStore, (state) => state.rows)
+  const assignments = usePersistentStore(assignmentStore, (state) => state.rows)
   const [scope, setScope] = useState<'all' | 'conflict'>('all')
+
+  const today = new Date().toISOString().slice(0, 10)
+  /** 用蜂缺口与在租箱数：花期/容量/排期变化后整体重算（纯派生） */
+  const gapPlan = useMemo(
+    () => computeGapPlan(orchards, colonies, dropPoints, assignments, today),
+    [orchards, colonies, dropPoints, assignments, today]
+  )
+  /** 费用预估只读：来源于技术员维护的合同与归还登记，托管队不可在此修改 */
+  const fees = useMemo(() => contracts.map((item) => estimateFee(item, today)), [contracts, today])
+  const totalFee = fees.reduce((sum, item) => sum + item.totalFee, 0)
 
   /** 由投放点的群号安排 + 蜂群当前所在地块，汇总出「某群在某地块」的时间占用 */
   const placements = useMemo<Placement[]>(() => {
@@ -100,6 +121,7 @@ export default function SchedulePage(): JSX.Element {
     () =>
       orchards.map((orchard) => {
         const related = placements.filter((item) => item.orchardId === orchard.id)
+        const gap = gapPlan.orchards.find((item) => item.orchard.id === orchard.id)
         return {
           key: orchard.id,
           orchard,
@@ -107,10 +129,15 @@ export default function SchedulePage(): JSX.Element {
           suggest: suggestColonyBoxes(orchard),
           placedCodes: Array.from(new Set(related.map((item) => item.colonyCode))),
           dropCodes: Array.from(new Set(related.map((item) => item.dropCode))),
-          conflicted: conflicts.some((item) => item.a.orchardId === orchard.id || item.b.orchardId === orchard.id)
+          conflicted: conflicts.some((item) => item.a.orchardId === orchard.id || item.b.orchardId === orchard.id),
+          capacity: gap?.capacity ?? Number.NaN,
+          rented: gap?.rented ?? 0,
+          gap: gap?.gap ?? 0,
+          peakDate: gap?.peakDate ?? orchard.bloomStart,
+          capacityLimited: gap?.capacityLimited ?? false
         }
       }),
-    [orchards, placements, conflicts]
+    [orchards, placements, conflicts, gapPlan]
   )
 
   const visibleRows = scope === 'conflict' ? rows.filter((row) => row.conflicted) : rows
@@ -159,6 +186,33 @@ export default function SchedulePage(): JSX.Element {
         <Alert type="success" showIcon message="当前排程无蜂群冲突" />
       )}
 
+      <Card
+        size="small"
+        title={
+          <Space>
+            用蜂缺口与租蜂费用（托管队只读）
+            <Tooltip title="缺口 = 花期需蜂（受投放点容量封顶）− 自有群补位 − 已排租蜂；自有群不够才租蜂。费用由技术员在「租蜂合同与缺口」页登记合同与实际归还后自动折算，本页只读，改地块花期/容量不会覆盖合同数据。">
+              <InfoCircleOutlined style={{ color: '#8c8c8c' }} />
+            </Tooltip>
+          </Space>
+        }
+      >
+        <Row gutter={24}>
+          <Col xs={12} md={6}>
+            <Statistic title="缺口峰值合计" value={gapPlan.totalGapPeak} suffix="箱" valueStyle={{ color: gapPlan.totalGapPeak > 0 ? '#cf1322' : '#3f8600' }} />
+          </Col>
+          <Col xs={12} md={6}>
+            <Statistic title="今日在租箱数" value={gapPlan.rentedToday} suffix="箱" />
+          </Col>
+          <Col xs={12} md={6}>
+            <Statistic title="在租峰值" value={gapPlan.rentedPeak} suffix="箱" />
+          </Col>
+          <Col xs={12} md={6}>
+            <Statistic title="租蜂费用预估" value={totalFee} precision={2} prefix="¥" valueStyle={{ color: totalFee > 0 ? '#cf1322' : undefined }} />
+          </Col>
+        </Row>
+      </Card>
+
       <Row gutter={16}>
         <Col xs={24} xl={14}>
           <Card size="small" title="花期条带与已投放群体" styles={{ body: { display: 'flex', flexDirection: 'column', gap: 12 } }}>
@@ -195,7 +249,7 @@ export default function SchedulePage(): JSX.Element {
           dataSource={rows}
           rowKey="key"
           pagination={false}
-          rowClassName={(record) => (record.conflicted ? 'conflict-row' : '')}
+          rowClassName={(record) => (record.conflicted || record.capacityLimited ? 'conflict-row' : '')}
           columns={[
             { title: '地块', dataIndex: ['orchard', 'name'], key: 'name' },
             { title: '作物', dataIndex: ['orchard', 'crop'], key: 'crop', width: 90 },
@@ -205,8 +259,38 @@ export default function SchedulePage(): JSX.Element {
               key: 'bloom',
               render: (_, record: ScheduleRow) => `${record.orchard.bloomStart} ~ ${record.orchard.bloomEnd}`
             },
-            { title: '花期天数', dataIndex: 'days', key: 'days', width: 100 },
-            { title: '建议箱数', dataIndex: 'suggest', key: 'suggest', width: 100 },
+            { title: '花期天数', dataIndex: 'days', key: 'days', width: 90 },
+            { title: '需蜂', dataIndex: 'suggest', key: 'suggest', width: 70 },
+            {
+              title: '投放点容量',
+              key: 'capacity',
+              width: 100,
+              render: (_, record: ScheduleRow) =>
+                Number.isFinite(record.capacity) ? (
+                  <Tag color={record.capacityLimited ? 'red' : 'default'}>{record.capacity}</Tag>
+                ) : (
+                  '不限'
+                )
+            },
+            {
+              title: '在租箱数',
+              key: 'rented',
+              width: 90,
+              render: (_, record: ScheduleRow) => (record.rented > 0 ? <Tag color="orange">{record.rented}</Tag> : '—')
+            },
+            {
+              title: '用蜂缺口',
+              key: 'gap',
+              width: 130,
+              render: (_, record: ScheduleRow) =>
+                record.gap > 0 ? (
+                  <Tooltip title={`峰值出现于 ${record.peakDate}`}>
+                    <Tag color="red">{record.gap} 箱 · {record.peakDate.slice(5)}</Tag>
+                  </Tooltip>
+                ) : (
+                  <Tag color="green">已补齐</Tag>
+                )
+            },
             {
               title: '投放点',
               key: 'drops',

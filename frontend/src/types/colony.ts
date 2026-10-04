@@ -1,3 +1,7 @@
+/** 蜂群来源：自有群或邻县蜂场租入群 */
+export const COLONY_SOURCES = ['自有', '租借'] as const
+export type ColonySource = (typeof COLONY_SOURCES)[number]
+
 /** 蜂种 */
 export const BEE_SPECIES = ['意蜂', '中蜂'] as const
 export type BeeSpecies = (typeof BEE_SPECIES)[number]
@@ -26,4 +30,8 @@ export interface BeeColony {
   lastCheckDate: string
   /** 蜂群健康备注 */
   healthNote: string
+  /** 蜂群来源：v3 升级前的历史数据按「自有」补齐，不产生租蜂费用 */
+  source: ColonySource
+  /** 来源为「租借」时关联的租蜂合同 */
+  rentalContractId?: string
 }

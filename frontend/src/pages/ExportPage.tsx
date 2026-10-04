@@ -1,15 +1,18 @@
 import { useMemo, useState } from 'react'
 import { Button, Card, Col, Radio, Row, Space, Table, Tag, Typography, message } from 'antd'
 import dayjs from 'dayjs'
-import type { BeeColony, DropPoint, Orchard, TransitRoute } from '@/types'
+import type { BeeColony, ContractFee, DropPoint, Orchard, TransitRoute } from '@/types'
 import { suggestColonyBoxes } from '@/types'
 import { usePersistentStore } from '@/hooks/usePersistentStore'
 import { orchardStore } from '@/stores/orchardStore'
 import { colonyStore } from '@/stores/colonyStore'
 import { droppointStore } from '@/stores/droppointStore'
 import { routeStore } from '@/stores/routeStore'
+import { contractStore } from '@/stores/contractStore'
+import { assignmentStore } from '@/stores/assignmentStore'
 import { downloadCsv, downloadJson } from '@/utils/export'
 import { bloomDays } from '@/utils/geo'
+import { estimateFee } from '@/utils/gap'
 
 interface ScheduleExportRow {
   orchard: string
@@ -31,7 +34,20 @@ export default function ExportPage(): JSX.Element {
   const colonies = usePersistentStore(colonyStore, (state) => state.rows)
   const dropPoints = usePersistentStore(droppointStore, (state) => state.rows)
   const routes = usePersistentStore(routeStore, (state) => state.rows)
+  const contracts = usePersistentStore(contractStore, (state) => state.rows)
+  const assignments = usePersistentStore(assignmentStore, (state) => state.rows)
   const [orientation, setOrientation] = useState<'portrait' | 'landscape'>('landscape')
+
+  const today = new Date().toISOString().slice(0, 10)
+  /** 费用预估只读导出行 */
+  const feeRows = useMemo(
+    () =>
+      contracts.map((item): ContractFee & { supplier: string; code: string } => {
+        const fee = estimateFee(item, today)
+        return { ...fee, supplier: item.supplier, code: item.code }
+      }),
+    [contracts, today]
+  )
 
   const orchardName = (id: string): string => orchards.find((item) => item.id === id)?.name ?? '未知地块'
 
@@ -136,9 +152,27 @@ export default function ExportPage(): JSX.Element {
       orchards,
       colonies,
       dropPoints,
-      routes
+      routes,
+      contracts,
+      assignments
     })
     message.success('全量数据已导出为 JSON 备份')
+  }
+
+  /** 费用预估只读导出（合同与归还登记为技术员维护，此处仅出报表） */
+  function exportFees(): void {
+    downloadCsv('租蜂费用预估.csv', feeRows as unknown as Record<string, unknown>[], [
+      { key: 'code', label: '合同编号' },
+      { key: 'supplier', label: '出租方' },
+      { key: 'lifecycle', label: '状态' },
+      { key: 'overdueDays', label: '超期天数' },
+      { key: 'overdueBoxes', label: '超期计费箱数' },
+      { key: 'missingBoxes', label: '缺箱数' },
+      { key: 'overdueFee', label: '超期费用' },
+      { key: 'missingFee', label: '缺箱费用' },
+      { key: 'totalFee', label: '费用合计' }
+    ])
+    message.success('租蜂费用预估已导出（只读报表）')
   }
 
   return (
@@ -166,11 +200,13 @@ export default function ExportPage(): JSX.Element {
             导出授粉安排清单（CSV）
           </Button>
           <Button onClick={exportRoutes}>导出转场路线表（CSV）</Button>
+          <Button onClick={exportFees}>导出租蜂费用预估（CSV）</Button>
           <Button onClick={exportBackup}>导出全量 JSON 备份</Button>
           <Tag>地块 {orchards.length}</Tag>
           <Tag>蜂群 {colonies.length}</Tag>
           <Tag>投放点 {dropPoints.length}</Tag>
           <Tag>路线 {routes.length}</Tag>
+          <Tag>租蜂合同 {contracts.length}</Tag>
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
             生成时间 {dayjs().format('YYYY-MM-DD HH:mm')}
           </Typography.Text>
@@ -214,6 +250,25 @@ export default function ExportPage(): JSX.Element {
               { title: '车辆', dataIndex: 'vehicleType', key: 'vehicle', width: 100 },
               { title: '出发时刻', dataIndex: 'departAt', key: 'depart' },
               { title: '途中风险', dataIndex: 'riskNote', key: 'risk' }
+            ]}
+          />
+        </Card>
+
+        <Card size="small" title={`租蜂费用预估（只读，${feeRows.length} 份合同）`} style={{ marginTop: 16 }}>
+          <Table
+            dataSource={feeRows}
+            rowKey={(record) => record.contract.id}
+            size="small"
+            pagination={false}
+            columns={[
+              { title: '合同编号', dataIndex: 'code', key: 'code', width: 100 },
+              { title: '出租方', dataIndex: 'supplier', key: 'supplier' },
+              { title: '状态', dataIndex: 'lifecycle', key: 'lifecycle', width: 100 },
+              { title: '超期天数', dataIndex: 'overdueDays', key: 'od', width: 90 },
+              { title: '缺箱数', dataIndex: 'missingBoxes', key: 'mb', width: 80 },
+              { title: '超期费用', dataIndex: 'overdueFee', key: 'of', width: 100, render: (v: number) => `¥${v.toFixed(2)}` },
+              { title: '缺箱费用', dataIndex: 'missingFee', key: 'mf', width: 100, render: (v: number) => `¥${v.toFixed(2)}` },
+              { title: '合计', dataIndex: 'totalFee', key: 'tf', width: 100, render: (v: number) => `¥${v.toFixed(2)}` }
             ]}
           />
         </Card>
