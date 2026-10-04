@@ -1,8 +1,8 @@
 import { useMemo, useState } from 'react'
 import { Button, Card, Col, DatePicker, Form, Input, InputNumber, Modal, Row, Select, Slider, Space, Table, Tag, Typography, message } from 'antd'
 import dayjs from 'dayjs'
-import type { BeeColony, ColonyStatus } from '@/types'
-import { BEE_SPECIES, BOX_TYPES, COLONY_STATUSES } from '@/types'
+import type { BeeColony, ColonySource, ColonyStatus } from '@/types'
+import { BEE_SPECIES, BOX_TYPES, COLONY_SOURCES, COLONY_STATUSES } from '@/types'
 import StatusTag from '@/components/common/StatusTag'
 import { usePersistentStore } from '@/hooks/usePersistentStore'
 import { colonyStore } from '@/stores/colonyStore'
@@ -15,6 +15,7 @@ export default function ColoniesPage(): JSX.Element {
   const orchards = usePersistentStore(orchardStore, (state) => state.rows)
 
   const [statusFilter, setStatusFilter] = useState<ColonyStatus | ''>('')
+  const [sourceFilter, setSourceFilter] = useState<ColonySource | ''>('')
   const [minFrames, setMinFrames] = useState(0)
   const [selectedKeys, setSelectedKeys] = useState<string[]>([])
   const [batchStatus, setBatchStatus] = useState<ColonyStatus>('在园')
@@ -29,6 +30,7 @@ export default function ColoniesPage(): JSX.Element {
     boxType: BeeColony['boxType']
     currentOrchardId: string
     status: ColonyStatus
+    source: ColonySource
     lastCheckDate: dayjs.Dayjs
     healthNote: string
   }>()
@@ -37,10 +39,11 @@ export default function ColoniesPage(): JSX.Element {
     () =>
       colonies.filter((item) => {
         if (statusFilter && item.status !== statusFilter) return false
+        if (sourceFilter && item.source !== sourceFilter) return false
         if (item.strengthFrames < minFrames) return false
         return true
       }),
-    [colonies, statusFilter, minFrames]
+    [colonies, statusFilter, sourceFilter, minFrames]
   )
 
   function orchardName(id: string): string {
@@ -56,6 +59,7 @@ export default function ColoniesPage(): JSX.Element {
       boxType: '标准继箱',
       currentOrchardId: orchards[0]?.id ?? '',
       status: '待投放',
+      source: '自有',
       lastCheckDate: dayjs(),
       healthNote: ''
     })
@@ -71,6 +75,7 @@ export default function ColoniesPage(): JSX.Element {
       boxType: colony.boxType,
       currentOrchardId: colony.currentOrchardId,
       status: colony.status,
+      source: colony.source,
       lastCheckDate: dayjs(colony.lastCheckDate),
       healthNote: colony.healthNote
     })
@@ -91,6 +96,7 @@ export default function ColoniesPage(): JSX.Element {
       boxType: values.boxType,
       currentOrchardId: values.currentOrchardId ?? '',
       status: values.status,
+      source: values.source ?? '自有',
       lastCheckDate: values.lastCheckDate.format('YYYY-MM-DD'),
       healthNote: values.healthNote?.trim() ?? ''
     }
@@ -150,6 +156,17 @@ export default function ColoniesPage(): JSX.Element {
               options={[{ value: '', label: '全部状态' }, ...COLONY_STATUSES.map((item) => ({ value: item, label: item }))]}
             />
           </Col>
+          <Col xs={24} md={4}>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              来源筛选
+            </Typography.Text>
+            <Select
+              style={{ width: '100%' }}
+              value={sourceFilter}
+              onChange={(value) => setSourceFilter(value)}
+              options={[{ value: '', label: '全部来源' }, ...COLONY_SOURCES.map((item) => ({ value: item, label: item }))]}
+            />
+          </Col>
           <Col xs={24} md={8}>
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
               最小群势：{minFrames} 足框
@@ -186,6 +203,13 @@ export default function ColoniesPage(): JSX.Element {
           rowSelection={{ selectedRowKeys: selectedKeys, onChange: (keys) => setSelectedKeys(keys as string[]) }}
           columns={[
             { title: '群号', dataIndex: 'code', key: 'code', width: 90 },
+            {
+              title: '来源',
+              dataIndex: 'source',
+              key: 'source',
+              width: 90,
+              render: (value: BeeColony['source']) => <Tag color={value === '租入' ? 'orange' : 'blue'}>{value}</Tag>
+            },
             { title: '蜂种', dataIndex: 'species', key: 'species', width: 80 },
             {
               title: '群势',
@@ -235,6 +259,11 @@ export default function ColoniesPage(): JSX.Element {
               {status}：{colonies.filter((item) => item.status === status).length} 群
             </Tag>
           ))}
+          {COLONY_SOURCES.map((source) => (
+            <Tag key={source} color={source === '租入' ? 'orange' : 'blue'}>
+              {source}：{colonies.filter((item) => item.source === source).length} 群
+            </Tag>
+          ))}
           <Tag color="blue">平均群势：{(colonies.reduce((sum, item) => sum + item.strengthFrames, 0) / Math.max(1, colonies.length)).toFixed(1)} 足框</Tag>
         </Space>
       </Card>
@@ -265,6 +294,11 @@ export default function ColoniesPage(): JSX.Element {
             <Col span={8}>
               <Form.Item name="status" label="状态" rules={[{ required: true }]}>
                 <Select options={COLONY_STATUSES.map((item) => ({ value: item, label: item }))} />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item name="source" label="来源（历史数据默认为自有）" rules={[{ required: true }]}>
+                <Select options={COLONY_SOURCES.map((item) => ({ value: item, label: item }))} />
               </Form.Item>
             </Col>
             <Col span={8}>

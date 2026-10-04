@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { Alert, Card, Col, Row, Segmented, Space, Table, Tag, Typography } from 'antd'
-import type { BeeColony, DropPoint, Orchard } from '@/types'
+import type { BeeColony, DropPoint, Orchard, RentalPlacement } from '@/types'
 import FlowerWindowBar from '@/components/common/FlowerWindowBar'
 import RouteMap from '@/components/common/RouteMap'
 import StatusTag from '@/components/common/StatusTag'
@@ -9,7 +9,9 @@ import { orchardStore } from '@/stores/orchardStore'
 import { colonyStore } from '@/stores/colonyStore'
 import { droppointStore } from '@/stores/droppointStore'
 import { routeStore } from '@/stores/routeStore'
+import { rentalPlacementStore } from '@/stores/rentalPlacementStore'
 import { bloomDays, flowerWindowOverlap } from '@/utils/geo'
+import { maxConcurrentBoxes } from '@/utils/allocation'
 import { suggestColonyBoxes } from '@/types'
 
 interface Placement {
@@ -35,6 +37,7 @@ interface ScheduleRow {
   suggest: number
   placedCodes: string[]
   dropCodes: string[]
+  rentedPeak: number
   conflicted: boolean
 }
 
@@ -44,6 +47,7 @@ export default function SchedulePage(): JSX.Element {
   const colonies = usePersistentStore(colonyStore, (state) => state.rows)
   const dropPoints = usePersistentStore(droppointStore, (state) => state.rows)
   const routes = usePersistentStore(routeStore, (state) => state.rows)
+  const rentalPlacements = usePersistentStore(rentalPlacementStore, (state) => state.rows)
   const [scope, setScope] = useState<'all' | 'conflict'>('all')
 
   /** 由投放点的群号安排 + 蜂群当前所在地块，汇总出「某群在某地块」的时间占用 */
@@ -100,6 +104,12 @@ export default function SchedulePage(): JSX.Element {
     () =>
       orchards.map((orchard) => {
         const related = placements.filter((item) => item.orchardId === orchard.id)
+        const rentedOfOrchard = rentalPlacements.filter((item: RentalPlacement) => item.orchardId === orchard.id)
+        const rentedPeak = maxConcurrentBoxes(
+          rentedOfOrchard.map((item) => ({ start: item.startDate, end: item.endDate, boxes: item.boxCount })),
+          orchard.bloomStart,
+          orchard.bloomEnd
+        )
         return {
           key: orchard.id,
           orchard,
@@ -107,10 +117,11 @@ export default function SchedulePage(): JSX.Element {
           suggest: suggestColonyBoxes(orchard),
           placedCodes: Array.from(new Set(related.map((item) => item.colonyCode))),
           dropCodes: Array.from(new Set(related.map((item) => item.dropCode))),
+          rentedPeak,
           conflicted: conflicts.some((item) => item.a.orchardId === orchard.id || item.b.orchardId === orchard.id)
         }
       }),
-    [orchards, placements, conflicts]
+    [orchards, placements, conflicts, rentalPlacements]
   )
 
   const visibleRows = scope === 'conflict' ? rows.filter((row) => row.conflicted) : rows
@@ -171,6 +182,7 @@ export default function SchedulePage(): JSX.Element {
                   <Tag color={row.orchard.accessibility === '大车可达' ? 'green' : row.orchard.accessibility === '仅小车' ? 'gold' : 'red'}>
                     {row.orchard.accessibility}
                   </Tag>
+                  {row.rentedPeak > 0 ? <Tag color="orange">租入在租 {row.rentedPeak} 箱</Tag> : null}
                   {row.placedCodes.length > 0 ? (
                     row.placedCodes.map((code) => <Tag key={code} color="cyan">已投放 {code}</Tag>)
                   ) : (
@@ -207,6 +219,13 @@ export default function SchedulePage(): JSX.Element {
             },
             { title: '花期天数', dataIndex: 'days', key: 'days', width: 100 },
             { title: '建议箱数', dataIndex: 'suggest', key: 'suggest', width: 100 },
+            {
+              title: '租入在租',
+              dataIndex: 'rentedPeak',
+              key: 'rented',
+              width: 100,
+              render: (value: number) => (value > 0 ? <Tag color="orange">{value} 箱</Tag> : '—')
+            },
             {
               title: '投放点',
               key: 'drops',

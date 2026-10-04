@@ -1,13 +1,16 @@
 import { useMemo, useState } from 'react'
 import { Button, Card, Col, Radio, Row, Space, Table, Tag, Typography, message } from 'antd'
 import dayjs from 'dayjs'
-import type { BeeColony, DropPoint, Orchard, TransitRoute } from '@/types'
+import type { BeeColony, DropPoint, Orchard, RentalContract, RentalPlacement, TransitRoute } from '@/types'
+import { estimateFee } from '@/types'
 import { suggestColonyBoxes } from '@/types'
 import { usePersistentStore } from '@/hooks/usePersistentStore'
 import { orchardStore } from '@/stores/orchardStore'
 import { colonyStore } from '@/stores/colonyStore'
 import { droppointStore } from '@/stores/droppointStore'
 import { routeStore } from '@/stores/routeStore'
+import { rentalContractStore } from '@/stores/rentalContractStore'
+import { rentalPlacementStore } from '@/stores/rentalPlacementStore'
 import { downloadCsv, downloadJson } from '@/utils/export'
 import { bloomDays } from '@/utils/geo'
 
@@ -25,14 +28,17 @@ interface ScheduleExportRow {
   owner: string
 }
 
-/** 导出授粉安排清单与转场路线表，并提供打印视图 */
+/** 导出授粉安排清单、租蜂费用预估与转场路线表，并提供打印视图 */
 export default function ExportPage(): JSX.Element {
   const orchards = usePersistentStore(orchardStore, (state) => state.rows)
   const colonies = usePersistentStore(colonyStore, (state) => state.rows)
   const dropPoints = usePersistentStore(droppointStore, (state) => state.rows)
   const routes = usePersistentStore(routeStore, (state) => state.rows)
+  const contracts = usePersistentStore(rentalContractStore, (state) => state.rows)
+  const placements = usePersistentStore(rentalPlacementStore, (state) => state.rows)
   const [orientation, setOrientation] = useState<'portrait' | 'landscape'>('landscape')
 
+  const today = dayjs().format('YYYY-MM-DD')
   const orchardName = (id: string): string => orchards.find((item) => item.id === id)?.name ?? '未知地块'
 
   /** 授粉安排清单：地块 × 投放点 × 群号 */
@@ -116,6 +122,81 @@ export default function ExportPage(): JSX.Element {
     message.success('授粉安排清单已导出')
   }
 
+  /** 租蜂费用预估表（托管队只读口径）：基础租金 + 超期 + 缺箱 */
+  const feeRows = useMemo(
+    () =>
+      contracts.map((contract: RentalContract) => {
+        const fee = estimateFee(contract, today)
+        return {
+          code: contract.code,
+          apiaryName: contract.apiaryName,
+          boxCount: contract.boxCount,
+          rentStart: contract.rentStart,
+          rentEnd: contract.rentEnd,
+          rentDays: fee.rentDays,
+          unitPrice: contract.unitPrice,
+          actualReturnDate: contract.actualReturnDate || '未归还',
+          actualReturnBoxes: contract.actualReturnBoxes ?? '',
+          overdueDays: fee.overdueDays,
+          overdueFee: fee.overdueFee,
+          missingBoxes: fee.missingBoxes,
+          missingFee: fee.missingFee,
+          baseFee: fee.baseFee,
+          totalFee: fee.totalFee
+        }
+      }),
+    [contracts, today]
+  )
+
+  /** 租蜂投放排单表 */
+  const rentalRows = useMemo(
+    () =>
+      placements.map((item: RentalPlacement) => {
+        const contract = contracts.find((row) => row.id === item.contractId)
+        return {
+          contractCode: contract?.code ?? item.contractId,
+          orchard: orchardName(item.orchardId),
+          boxCount: item.boxCount,
+          startDate: item.startDate,
+          endDate: item.endDate
+        }
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [placements, contracts, orchards]
+  )
+
+  function exportFees(): void {
+    downloadCsv('租蜂费用预估.csv', feeRows as unknown as Record<string, unknown>[], [
+      { key: 'code', label: '合同编号' },
+      { key: 'apiaryName', label: '邻县蜂场' },
+      { key: 'boxCount', label: '合同箱数' },
+      { key: 'rentStart', label: '起租日' },
+      { key: 'rentEnd', label: '归租日' },
+      { key: 'rentDays', label: '在租天数' },
+      { key: 'unitPrice', label: '单价(元/箱天)' },
+      { key: 'actualReturnDate', label: '实际归还日' },
+      { key: 'actualReturnBoxes', label: '实际归还箱数' },
+      { key: 'overdueDays', label: '超期天数' },
+      { key: 'overdueFee', label: '超期费用' },
+      { key: 'missingBoxes', label: '缺箱数' },
+      { key: 'missingFee', label: '缺箱赔偿' },
+      { key: 'baseFee', label: '基础租金' },
+      { key: 'totalFee', label: '预估合计' }
+    ])
+    message.success('租蜂费用预估表已导出')
+  }
+
+  function exportRentals(): void {
+    downloadCsv('租蜂投放排单.csv', rentalRows as unknown as Record<string, unknown>[], [
+      { key: 'contractCode', label: '合同编号' },
+      { key: 'orchard', label: '投放地块' },
+      { key: 'boxCount', label: '投放箱数' },
+      { key: 'startDate', label: '投放起' },
+      { key: 'endDate', label: '投放止' }
+    ])
+    message.success('租蜂投放排单表已导出')
+  }
+
   function exportRoutes(): void {
     downloadCsv('转场路线表.csv', routeRows as unknown as Record<string, unknown>[], [
       { key: 'from', label: '出发投放点' },
@@ -136,7 +217,9 @@ export default function ExportPage(): JSX.Element {
       orchards,
       colonies,
       dropPoints,
-      routes
+      routes,
+      rentalContracts: contracts,
+      rentalPlacements: placements
     })
     message.success('全量数据已导出为 JSON 备份')
   }
@@ -165,11 +248,14 @@ export default function ExportPage(): JSX.Element {
           <Button type="primary" onClick={exportSchedule}>
             导出授粉安排清单（CSV）
           </Button>
+          <Button onClick={exportRentals}>导出租蜂投放排单（CSV）</Button>
+          <Button onClick={exportFees}>导出租蜂费用预估（CSV）</Button>
           <Button onClick={exportRoutes}>导出转场路线表（CSV）</Button>
           <Button onClick={exportBackup}>导出全量 JSON 备份</Button>
           <Tag>地块 {orchards.length}</Tag>
           <Tag>蜂群 {colonies.length}</Tag>
           <Tag>投放点 {dropPoints.length}</Tag>
+          <Tag>租蜂合同 {contracts.length}</Tag>
           <Tag>路线 {routes.length}</Tag>
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
             生成时间 {dayjs().format('YYYY-MM-DD HH:mm')}
@@ -196,6 +282,29 @@ export default function ExportPage(): JSX.Element {
               { title: '投放时间窗', dataIndex: 'dropWindow', key: 'window' },
               { title: '撤场时间', dataIndex: 'withdrawTime', key: 'withdraw' },
               { title: '责任人', dataIndex: 'owner', key: 'owner' }
+            ]}
+          />
+        </Card>
+
+        <Card size="small" title={`租蜂费用预估（${feeRows.length} 份合同，托管队只读口径）`} style={{ marginBottom: 16 }}>
+          <Table
+            dataSource={feeRows}
+            rowKey="code"
+            size="small"
+            pagination={false}
+            columns={[
+              { title: '合同编号', dataIndex: 'code', key: 'code', width: 110 },
+              { title: '邻县蜂场', dataIndex: 'apiaryName', key: 'apiary' },
+              { title: '箱数', dataIndex: 'boxCount', key: 'boxes', width: 70 },
+              { title: '租期', key: 'term', render: (_, record) => `${record.rentStart} ~ ${record.rentEnd}` },
+              { title: '天数', dataIndex: 'rentDays', key: 'days', width: 70 },
+              { title: '单价', dataIndex: 'unitPrice', key: 'price', width: 90 },
+              { title: '超期天', dataIndex: 'overdueDays', key: 'od', width: 80 },
+              { title: '超期费', dataIndex: 'overdueFee', key: 'ofee', width: 90 },
+              { title: '缺箱', dataIndex: 'missingBoxes', key: 'mb', width: 70 },
+              { title: '缺箱赔偿', dataIndex: 'missingFee', key: 'mfee', width: 100 },
+              { title: '基础租金', dataIndex: 'baseFee', key: 'bfee', width: 100 },
+              { title: '合计', dataIndex: 'totalFee', key: 'total', width: 100, render: (v: number) => `¥ ${v.toFixed(2)}` }
             ]}
           />
         </Card>

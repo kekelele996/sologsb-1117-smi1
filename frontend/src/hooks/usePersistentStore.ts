@@ -1,22 +1,24 @@
 import { useStore } from 'zustand'
 import type { StoreApi, UseBoundStore } from 'zustand'
 import Dexie, { type Table } from 'dexie'
-import type { BeeColony, DropPoint, Orchard, TransitRoute } from '@/types'
+import type { BeeColony, DropPoint, Orchard, RentalContract, RentalPlacement, TransitRoute } from '@/types'
 
 /** IndexedDB 数据结构版本号 */
-export const SCHEMA_VERSION = 2
+export const SCHEMA_VERSION = 3
 
 export interface MetaRow {
   key: string
   value: number
 }
 
-/** Dexie 封装：果园 / 蜂群 / 投放点 / 转场路线 四张表 + 元数据表 */
+/** Dexie 封装：果园 / 蜂群 / 投放点 / 转场路线 / 租蜂合同 / 租蜂投放 六张表 + 元数据表 */
 class BeeRouteDb extends Dexie {
   orchards!: Table<Orchard, string>
   colonies!: Table<BeeColony, string>
   dropPoints!: Table<DropPoint, string>
   routes!: Table<TransitRoute, string>
+  rentalContracts!: Table<RentalContract, string>
+  rentalPlacements!: Table<RentalPlacement, string>
   meta!: Table<MetaRow, string>
 
   constructor() {
@@ -44,6 +46,28 @@ class BeeRouteDb extends Dexie {
           .modify((point) => {
             if (!point.capacityBoxes) {
               point.capacityBoxes = 8
+            }
+          })
+      })
+    // v3：新增租蜂合同 / 租蜂投放排单两张表；蜂群新增 source 字段，
+    // 历史数据没有租借来源，升级后按「自有群」补齐（自有群不产生租蜂费用）
+    this.version(SCHEMA_VERSION)
+      .stores({
+        orchards: 'id, name, crop, bloomStart',
+        colonies: 'id, code, status, currentOrchardId, source',
+        dropPoints: 'id, orchardId, code, dropWindow',
+        routes: 'id, fromDropId, toDropId, departAt',
+        rentalContracts: 'id, code, rentStart, rentEnd',
+        rentalPlacements: 'id, contractId, orchardId',
+        meta: 'key'
+      })
+      .upgrade(async (tx) => {
+        await tx
+          .table<BeeColony, string>('colonies')
+          .toCollection()
+          .modify((colony) => {
+            if (!colony.source) {
+              colony.source = '自有'
             }
           })
       })
@@ -150,7 +174,8 @@ export async function seedDemoData(): Promise<void> {
       currentOrchardId: 'orc_ap',
       status: '在园',
       lastCheckDate: `${year}-04-09`,
-      healthNote: '群势稳定，子脾整齐'
+      healthNote: '群势稳定，子脾整齐',
+      source: '自有'
     },
     {
       id: 'col_002',
@@ -161,7 +186,8 @@ export async function seedDemoData(): Promise<void> {
       currentOrchardId: 'orc_rape',
       status: '转场中',
       lastCheckDate: `${year}-04-05`,
-      healthNote: '轻微螨害，转场后需治螨'
+      healthNote: '轻微螨害，转场后需治螨',
+      source: '自有'
     },
     {
       id: 'col_003',
@@ -172,7 +198,8 @@ export async function seedDemoData(): Promise<void> {
       currentOrchardId: '',
       status: '待投放',
       lastCheckDate: `${year}-04-02`,
-      healthNote: '新分群，群势偏弱'
+      healthNote: '新分群，群势偏弱',
+      source: '自有'
     }
   ])
 
@@ -232,6 +259,33 @@ export async function seedDemoData(): Promise<void> {
       departAt: `${year}-04-13T06:30`,
       riskNote: '西沟坡道窄，雨天泥泞，需小车倒运',
       actualNote: '待执行'
+    }
+  ])
+
+  await db.rentalContracts.bulkPut([
+    {
+      id: 'rc_001',
+      code: `ZL-${year}-01`,
+      apiaryName: '邻县陇县益农蜂场',
+      contact: '139****6620（赵师傅）',
+      boxCount: 12,
+      rentStart: `${year}-04-06`,
+      rentEnd: `${year}-04-20`,
+      unitPrice: 2.5,
+      note: '意蜂标准继箱，大车直送北岭苹果园投放点',
+      actualReturnDate: '',
+      actualReturnBoxes: null
+    }
+  ])
+
+  await db.rentalPlacements.bulkPut([
+    {
+      id: 'rp_001',
+      contractId: 'rc_001',
+      orchardId: 'orc_ap',
+      boxCount: 10,
+      startDate: `${year}-04-07`,
+      endDate: `${year}-04-19`
     }
   ])
 }
